@@ -1,0 +1,19 @@
+{
+  "name": "shilewu-asset-manager",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Asset management service backed by Express + SQLite + Tencent Cloud COS",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0",
+    "express": "^4.21.2"
+  }
+}

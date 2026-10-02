@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>失乐园 · 资产管理</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <span class="brand-dot"></span>
+      <span class="topbar-brand-name">失乐园 · 制作台</span>
+    </div>
+    <nav class="topbar-tabs" id="top-tabs">
+      <button class="top-tab active" data-tab="assets">资产管理</button>
+      <button class="top-tab" data-tab="script">剧本</button>
+    </nav>
+  </header>
+
+  <div class="views">
+    <div class="app" id="view-assets">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <span class="brand-name">资产管理</span>
+        </div>
+        <nav class="nav" id="nav"></nav>
+        <div class="sidebar-foot">
+          <span class="status-dot" id="cos-dot"></span>
+          <span id="cos-label">连接中…</span>
+        </div>
+      </aside>
+
+      <section class="list-pane">
+        <header class="list-head">
+          <div class="list-head-title">
+            <h1 id="list-title">角色</h1>
+            <span class="pill" id="list-count">0</span>
+          </div>
+          <button class="icon-btn" id="add-btn" title="新建">+</button>
+        </header>
+        <div class="list-search">
+          <input id="search-input" type="text" placeholder="搜索…" autocomplete="off" />
+        </div>
+        <div class="list" id="list"></div>
+      </section>
+
+      <section class="detail-pane" id="detail"></section>
+    </div>
+
+    <div class="script-app" id="view-script" hidden></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <input type="file" id="file-input" hidden />
+
+  <script src="./app.js" type="module"></script>
+</body>
+</html>
