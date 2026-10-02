@@ -13,7 +13,7 @@ import {
   status as cosStatus,
   mimeFor,
 } from "./cos.js";
-import { buildModel, readScriptText, writeScriptText, readScriptDoc, writeScriptDoc, scriptDocInfo } from "./script.js";
+import { buildModel, readScriptText, writeScriptText, readScriptDoc, writeScriptDoc, scriptDocInfo, createScene, deleteScene } from "./script.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = resolve(__dirname, "..", "public");
@@ -346,6 +346,14 @@ app.put("/api/script-doc", wrap(async function (req, res) {
   if (!doc || typeof doc !== "object" || !doc.labels) return badRequest(res, "doc is required");
   const saved = writeScriptDoc(doc);
   res.json({ doc: doc, saved: saved });
+}));
+
+app.post("/api/script-scenes", wrap(async function (req, res) {
+  res.json(createScene());
+}));
+
+app.delete("/api/script-scenes/:id", wrap(async function (req, res) {
+  res.json(deleteScene(req.params.id));
 }));
 
 /* ----------------------------- static ----------------------------- */

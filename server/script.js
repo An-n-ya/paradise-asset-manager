@@ -118,6 +118,83 @@ export function scriptDocInfo() {
   return { path: CONFIG.scriptDocPath, bytes: stat.size, updatedAt: new Date(stat.mtimeMs).toISOString() };
 }
 
+/* ------------------------------- scenes ------------------------------- */
+
+function sceneNo(id) {
+  const match = String(id).match(/^s(\d+)$/);
+  if (match) return "SCENE " + match[1];
+  return String(id).toUpperCase();
+}
+
+function nextSceneId(labels) {
+  let max = 0;
+  Object.keys(labels || {}).forEach(function (id) {
+    const match = id.match(/^s(\d+)$/);
+    if (match) max = Math.max(max, Number(match[1]));
+  });
+  let n = max + 1;
+  while (labels && labels["s" + n]) n += 1;
+  return "s" + n;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeLabelBlock(id) {
+  const file = managedPath();
+  if (!existsSync(file)) return false;
+  const lines = readFileSync(file, "utf8").split(/\r?\n/);
+  const target = new RegExp("^label\\s+" + escapeRegExp(id) + "\\s*:\\s*$");
+  const out = [];
+  let i = 0;
+  let removed = false;
+  while (i < lines.length) {
+    if (target.test(lines[i].trim())) {
+      removed = true;
+      i += 1;
+      while (i < lines.length) {
+        const current = lines[i];
+        if (current.trim() === "" || /^\s/.test(current)) {
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+    out.push(lines[i]);
+    i += 1;
+  }
+  if (!removed) return false;
+  writeFileSync(file, out.join("\n"), "utf8");
+  return true;
+}
+
+export function createScene() {
+  const doc = readScriptDoc();
+  if (!doc.labels || typeof doc.labels !== "object") doc.labels = {};
+  if (!Array.isArray(doc.order)) doc.order = Object.keys(doc.labels);
+  const id = nextSceneId(doc.labels);
+  doc.labels[id] = { no: sceneNo(id), blocks: [] };
+  doc.order.push(id);
+  const saved = writeScriptDoc(doc);
+  return { id: id, no: doc.labels[id].no, doc: doc, saved: saved };
+}
+
+export function deleteScene(id) {
+  const cleanId = String(id || "").trim();
+  if (!cleanId) throw new Error("id is required");
+  const doc = readScriptDoc();
+  if (doc.labels && doc.labels[cleanId]) delete doc.labels[cleanId];
+  if (Array.isArray(doc.order)) {
+    doc.order = doc.order.filter(function (entry) { return entry !== cleanId; });
+  }
+  const saved = writeScriptDoc(doc);
+  const removed = removeLabelBlock(cleanId);
+  return { id: cleanId, removed: removed, doc: doc, saved: saved };
+}
+
 /* ------------------------------ tokenize ------------------------------ */
 
 function tokenize(text) {

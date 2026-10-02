@@ -969,6 +969,12 @@ select {
   font-weight: 600;
 }
 
+.editor-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .editor-status {
   font-size: 11px;
   color: var(--text-dim);

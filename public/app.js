@@ -1497,6 +1497,7 @@ function scriptLabelsInner() {
         "<h1>剧本</h1>" +
         '<span class="pill" data-script-label-count>' + scriptLabelList().length + "</span>" +
       "</div>" +
+      '<button class="icon-btn" data-act="add-scene" title="新增场景">+</button>' +
     "</header>" +
     '<div class="list-search">' +
       '<input data-script-search type="text" placeholder="搜索章节…" autocomplete="off" value="' +
@@ -1510,7 +1511,10 @@ function scriptEditorInner() {
   return (
     '<div class="editor-head">' +
       '<div class="editor-title">剧本编辑</div>' +
-      '<div class="editor-status" data-script-status>就绪</div>' +
+      '<div class="editor-head-right">' +
+        '<div class="editor-status" data-script-status>就绪</div>' +
+        '<button class="btn danger small" data-act="delete-scene">删除场景</button>' +
+      "</div>" +
     "</div>" +
     '<div class="blocks" data-script-blocks></div>' +
     '<div class="editor-foot">' +
@@ -1623,6 +1627,46 @@ async function saveScript() {
 
 async function flushScriptSave() {
   if (scriptDirty) await saveScript();
+}
+
+async function addScene() {
+  closeBlockMenu();
+  clearTimeout(scriptSaveTimer);
+  try {
+    await saveScript();
+    const data = await api("/api/script-scenes", { method: "POST" });
+    if (data && data.doc && data.doc.labels) state.scriptDoc = data.doc;
+    if (data && data.id) state.scriptLabelId = data.id;
+    scriptDirty = false;
+    scriptStatus = { text: "已新增场景", cls: "saved" };
+    updateScriptPanes();
+    toast("已新增 " + (data && data.no ? data.no : "场景"));
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function removeScene() {
+  if (!state.scriptLabelId) return;
+  const target = scriptLabelList().find(function (l) { return l.id === state.scriptLabelId; });
+  const name = target ? target.no + " · " + target.title : state.scriptLabelId;
+  if (!window.confirm("确定删除「" + name + "」吗？此操作不可撤销。")) return;
+  closeBlockMenu();
+  clearTimeout(scriptSaveTimer);
+  try {
+    await saveScript();
+    const id = state.scriptLabelId;
+    const data = await api("/api/script-scenes/" + encodeURIComponent(id), { method: "DELETE" });
+    if (data && data.doc && data.doc.labels) state.scriptDoc = data.doc;
+    const list = scriptLabelList();
+    state.scriptLabelId = list.length ? list[0].id : null;
+    scriptDirty = false;
+    scriptStatus = { text: "已删除场景", cls: "saved" };
+    updateScriptPanes();
+    toast("已删除场景");
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 async function switchTab(tab) {
@@ -1991,6 +2035,14 @@ el.viewScript.addEventListener("click", function (event) {
   const act = btn.dataset.act;
   if (act === "save-script") {
     saveScript();
+    return;
+  }
+  if (act === "add-scene") {
+    addScene();
+    return;
+  }
+  if (act === "delete-scene") {
+    removeScene();
     return;
   }
   if (act === "block-menu") {
