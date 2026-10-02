@@ -1,0 +1,90 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to server
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.SSH_HOST }}
+      DEPLOY_USER: ${{ secrets.SSH_USER }}
+      DEPLOY_PORT: ${{ secrets.SSH_PORT }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build deploy bundle
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./node_modules' \
+            --exclude='./data' \
+            --exclude='./.env' \
+            -czf "$RUNNER_TEMP/deploy.tar.gz" .
+          ls -lh "$RUNNER_TEMP/deploy.tar.gz"
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?secret SSH_HOST is required}"
+          : "${DEPLOY_USER:?secret SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?secret SSH_PRIVATE_KEY is required}"
+          port="${DEPLOY_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host deploy-target"
+            echo "  HostName $DEPLOY_HOST"
+            echo "  User $DEPLOY_USER"
+            echo "  Port $port"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking accept-new"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Upload bundle to server
+        run: |
+          set -euo pipefail
+          scp "$RUNNER_TEMP/deploy.tar.gz" deploy-target:/tmp/paradise-deploy.tar.gz
+
+      - name: Activate release
+        run: |
+          set -euo pipefail
+          target="${DEPLOY_PATH:-/opt/paradise-asset-manager}"
+          ssh deploy-target bash -s -- "$target" "$GITHUB_SHA" <<'REMOTE'
+          set -euo pipefail
+          target="$1"
+          sha="$2"
+          cd "$target"
+          tar -xzf /tmp/paradise-deploy.tar.gz
+          rm -f /tmp/paradise-deploy.tar.gz
+          node --check server/index.js
+          node --check server/script.js
+          npm install --omit=dev --no-audit --no-fund --prefer-offline
+          printf '%s\n' "$sha" > .deployed-sha
+          systemctl restart paradise-asset-manager
+          sleep 2
+          systemctl is-active paradise-asset-manager
+          curl -fsS -o /dev/null http://127.0.0.1:8787/
+          echo "Deployed commit $sha"
+          REMOTE
