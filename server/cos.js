@@ -270,6 +270,45 @@ export async function deleteObject(relativeKey) {
   return { key: relativeKey, objectKey: objectKey };
 }
 
+/*
+ * Download an object into a Buffer. Used server-side (e.g. to fetch an
+ * uploaded original before re-encoding it for preview).
+ */
+export async function getObjectBuffer(relativeKey) {
+  const objectKey = toObjectKey(relativeKey);
+  const signPath = objectKey ? "/" + objectKey : "/";
+  const urlPath = objectKey ? "/" + encodeKey(objectKey) : "/";
+  const signed = buildAuthorization("get", signPath, {}, { host: hostFor() }, EXPIRES);
+  const url = "https://" + hostFor() + urlPath + "?" + signed.authorization;
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) {
+    const text = await res.text().catch(function () { return ""; });
+    const err = new Error("COS GET " + res.status + ": " + text.slice(0, 400));
+    err.status = res.status;
+    throw err;
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/*
+ * Upload a Buffer to an object key using COS v5 signature. content-type is sent
+ * as an unsigned header so it is stored without needing to be part of the
+ * signed header list.
+ */
+export async function putObject(relativeKey, buffer, options) {
+  const opts = options || {};
+  const objectKey = toObjectKey(relativeKey);
+  const contentType = opts.contentType || "application/octet-stream";
+  await cosRequest({
+    method: "put",
+    key: objectKey,
+    headers: { "content-type": contentType },
+    body: buffer,
+    expires: opts.expires,
+  });
+  return { key: relativeKey, objectKey: objectKey, contentType: contentType };
+}
+
 export function status() {
   const c = CONFIG.cos;
   return {

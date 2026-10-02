@@ -757,6 +757,10 @@ select {
   font-size: 12px;
 }
 
+.preview-actions {
+  margin-top: 10px;
+}
+
 .exp-list {
   display: flex;
   flex-direction: column;
@@ -903,6 +907,63 @@ select {
 .toast.err {
   border-color: var(--err);
   color: #ff9f8e;
+}
+
+/* ---------------------------- upload overlay ---------------------------- */
+
+.upload-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.upload-overlay[hidden] {
+  display: none;
+}
+
+.upload-card {
+  min-width: 210px;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+
+.upload-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: upload-spin 0.8s linear infinite;
+}
+
+@keyframes upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.upload-title {
+  font-size: 13px;
+  color: var(--text);
+  text-align: center;
+  word-break: break-all;
+}
+
+.upload-sub {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 ::-webkit-scrollbar {

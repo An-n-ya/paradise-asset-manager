@@ -73,6 +73,7 @@ const el = {
   nav: document.getElementById("nav"),
   listTitle: document.getElementById("list-title"),
   listCount: document.getElementById("list-count"),
+  listTotal: document.getElementById("list-total"),
   addBtn: document.getElementById("add-btn"),
   searchInput: document.getElementById("search-input"),
   list: document.getElementById("list"),
@@ -80,6 +81,9 @@ const el = {
   cosDot: document.getElementById("cos-dot"),
   cosLabel: document.getElementById("cos-label"),
   toast: document.getElementById("toast"),
+  uploadOverlay: document.getElementById("upload-overlay"),
+  uploadTitle: document.getElementById("upload-title"),
+  uploadSub: document.getElementById("upload-sub"),
   fileInput: document.getElementById("file-input"),
 };
 
@@ -206,6 +210,10 @@ function humanSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2) + " MB";
 }
 
+function sizeText(bytes) {
+  return bytes > 0 ? humanSize(bytes) : "—";
+}
+
 let toastTimer = null;
 function toast(message, isError) {
   el.toast.textContent = message;
@@ -214,6 +222,21 @@ function toast(message, isError) {
   toastTimer = setTimeout(function () {
     el.toast.className = "toast";
   }, 2200);
+}
+
+function showUploadOverlay(title, sub) {
+  el.uploadTitle.textContent = title || "正在上传…";
+  el.uploadSub.textContent = sub || "";
+  el.uploadOverlay.hidden = false;
+}
+
+function updateUploadOverlay(title, sub) {
+  if (title !== undefined) el.uploadTitle.textContent = title;
+  if (sub !== undefined) el.uploadSub.textContent = sub;
+}
+
+function hideUploadOverlay() {
+  el.uploadOverlay.hidden = true;
 }
 
 async function api(path, options) {
@@ -247,18 +270,32 @@ function safeFileName(name) {
   return String(name || "file").replace(/[\\/]+/g, "_").replace(/\s+/g, " ").trim();
 }
 
-async function uploadToCos(file, relativeKey) {
+function putToCos(url, file, contentType, onProgress) {
+  return new Promise(function (resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+    xhr.setRequestHeader("content-type", contentType);
+    if (onProgress) {
+      xhr.upload.onprogress = function (event) {
+        if (event.lengthComputable) onProgress(event.loaded, event.total);
+      };
+    }
+    xhr.onload = function () {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error("上传失败 (" + xhr.status + ")"));
+    };
+    xhr.onerror = function () { reject(new Error("上传失败（网络错误）")); };
+    xhr.send(file);
+  });
+}
+
+async function uploadToCos(file, relativeKey, onProgress) {
   const contentType = file.type || "application/octet-stream";
   const info = await api("/api/cos/presign-upload", {
     method: "POST",
     body: { key: relativeKey, contentType: contentType },
   });
-  const res = await fetch(info.url, {
-    method: "PUT",
-    headers: { "content-type": contentType },
-    body: file,
-  });
-  if (!res.ok) throw new Error("上传失败 (" + res.status + ")");
+  await putToCos(info.url, file, contentType, onProgress);
   return info;
 }
 
@@ -369,6 +406,7 @@ function renderList() {
 
   let rows = "";
   let count = 0;
+  let totalBytes = 0;
   const addVisible = nav.kind !== "bucket";
   el.addBtn.style.display = addVisible ? "" : "none";
 
@@ -398,12 +436,14 @@ function renderList() {
     count = items.length;
     rows = items.map(function (a) {
       const active = a.id === state.selectedAssetId ? " active" : "";
+      totalBytes += (a.size || 0) + (a.previewSize || 0);
+      const sizeLabel = a.size ? " · " + humanSize(a.size) : "";
       return (
         '<div class="row' + active + '" data-row="asset" data-id="' + a.id + '">' +
           rowThumb(a.asset_key, a.previewUrl || a.url) +
           '<div class="row-main">' +
             '<div class="row-name">' + escapeHtml(a.name) + "</div>" +
-            '<div class="row-sub">' + escapeHtml(a.asset_key || "未设置资源") + "</div>" +
+            '<div class="row-sub">' + escapeHtml(a.asset_key || "未设置资源") + sizeLabel + "</div>" +
           "</div>" +
         "</div>"
       );
@@ -415,6 +455,7 @@ function renderList() {
     count = items.length;
     rows = items.map(function (o) {
       const active = o.relativeKey === state.selectedObjectKey ? " active" : "";
+      totalBytes += o.size || 0;
       return (
         '<div class="row' + active + '" data-row="object" data-key="' + escapeHtml(o.relativeKey) + '">' +
           rowThumb(o.relativeKey, o.previewUrl || o.url) +
@@ -428,12 +469,19 @@ function renderList() {
   }
 
   el.listCount.textContent = String(count);
+  if (totalBytes > 0) {
+    el.listTotal.textContent = "占用 " + humanSize(totalBytes);
+    el.listTotal.hidden = false;
+  } else {
+    el.listTotal.hidden = true;
+  }
   el.list.innerHTML = rows || '<div class="list-empty">暂无数据</div>';
 }
 
 /* ---------------------------- detail ---------------------------- */
 
-function previewHtml(key, url, previewUrl) {
+function previewHtml(key, url, previewUrl, opts) {
+  opts = opts || {};
   if (!key) return '<div class="preview-empty">未设置资源</div>';
   const c = categoryOf(key);
   if (c === "image") {
@@ -442,8 +490,15 @@ function previewHtml(key, url, previewUrl) {
       : '<div class="preview-empty">资源不可预览</div>';
   }
   if (c === "audio") {
-    return url ? '<audio controls src="' + escapeHtml(url) + '"></audio>'
+    const src = opts.audioUrl || url;
+    let html = src ? '<audio controls src="' + escapeHtml(src) + '"></audio>'
       : '<div class="preview-empty">资源不可预览</div>';
+    if (opts.downloadUrl) {
+      html += '<div class="preview-actions">' +
+        '<a class="btn small" href="' + escapeHtml(opts.downloadUrl) + '" download="' + escapeHtml(opts.downloadName || "audio") + '">下载原音频</a>' +
+        "</div>";
+    }
+    return html;
   }
   if (c === "video") {
     return url ? '<video controls src="' + escapeHtml(url) + '"></video>'
@@ -597,7 +652,17 @@ function renderAssetDetail() {
     '<div class="section">' +
       '<div class="section-title"><span>预览</span>' +
         '<button class="btn small" data-act="upload-asset" data-id="' + asset.id + '">上传资源</button></div>' +
-      '<div class="preview-box">' + previewHtml(asset.asset_key, asset.url, asset.previewUrl) + "</div>" +
+      '<div class="preview-box">' + previewHtml(asset.asset_key, asset.url, asset.previewUrl, {
+        audioUrl: asset.previewAudioUrl || asset.url,
+        downloadUrl: asset.url,
+        downloadName: asset.name,
+      }) + "</div>" +
+      '<dl class="meta-list">' +
+        "<dt>资源大小</dt><dd>" + sizeText(asset.size) + "</dd>" +
+        (asset.preview_key
+          ? "<dt>预览大小</dt><dd>" + sizeText(asset.previewSize) + " · " + escapeHtml(asset.preview_key) + "</dd>"
+          : "") +
+      "</dl>" +
     "</div>"
   );
 }
@@ -1855,31 +1920,53 @@ async function handleFile(file) {
   const target = pendingUpload;
   pendingUpload = null;
   if (!target || !file) return;
+  const name = safeFileName(file.name);
+  const onProgress = function (loaded, total) {
+    const pct = total ? Math.round((loaded / total) * 100) : 0;
+    updateUploadOverlay("正在上传 " + name, humanSize(file.size) + " · " + pct + "%");
+  };
+  showUploadOverlay("正在上传 " + name, humanSize(file.size) + " · 0%");
   try {
-    const name = safeFileName(file.name);
     if (target.kind === "character-avatar") {
       const key = "images/" + name;
-      await uploadToCos(file, key);
+      await uploadToCos(file, key, onProgress);
       await api("/api/characters/" + target.id, { method: "PUT", body: { avatar_key: key } });
       await refreshData();
       await selectCharacter(Number(target.id));
     } else if (target.kind === "expression") {
       const key = "images/" + name;
-      await uploadToCos(file, key);
+      await uploadToCos(file, key, onProgress);
       await api("/api/expressions/" + target.id, { method: "PUT", body: { asset_key: key } });
       await refreshData();
       await selectCharacter(state.selectedCharacterId);
     } else if (target.kind === "asset") {
       const asset = state.assets.find(function (a) { return a.id === target.id; });
       const key = dirForType(asset ? asset.type : "") + name;
-      await uploadToCos(file, key);
-      await api("/api/assets/" + target.id, { method: "PUT", body: { asset_key: key } });
+      await uploadToCos(file, key, onProgress);
+      let previewKey = "";
+      if (categoryOf(key) === "audio") {
+        updateUploadOverlay("正在压缩音频…", name);
+        try {
+          const compressed = await api("/api/audio/compress", {
+            method: "POST",
+            body: { key: key },
+          });
+          previewKey = compressed.previewKey || "";
+        } catch (err) {
+          // Compression unavailable (e.g. ffmpeg missing) or failed: fall back
+          // to previewing the original. The upload itself already succeeded.
+          console.warn("audio compression skipped:", err.message);
+        }
+      }
+      await api("/api/assets/" + target.id, { method: "PUT", body: { asset_key: key, preview_key: previewKey } });
       await refreshData();
       selectAsset(Number(target.id));
     }
     toast("上传成功");
   } catch (err) {
     toast(err.message, true);
+  } finally {
+    hideUploadOverlay();
   }
 }
 

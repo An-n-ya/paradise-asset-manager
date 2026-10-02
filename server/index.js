@@ -10,10 +10,13 @@ import {
   deleteObject,
   toRelativeKey,
   imagePreviewUrl,
+  getObjectBuffer,
+  putObject,
   status as cosStatus,
   mimeFor,
 } from "./cos.js";
 import { buildModel, readScriptText, writeScriptText, readScriptDoc, writeScriptDoc, scriptDocInfo, createScene, deleteScene } from "./script.js";
+import { compressAudio, previewKeyFor, ffmpegAvailable, PREVIEW_MIME } from "./audio.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = resolve(__dirname, "..", "public");
@@ -31,6 +34,30 @@ function signedUrl(relativeKey, expires) {
 function previewUrl(relativeKey) {
   if (!relativeKey) return "";
   return imagePreviewUrl(relativeKey) || signedUrl(relativeKey);
+}
+
+function audioPreviewUrl(relativeKey) {
+  if (!relativeKey) return "";
+  return signedUrl(relativeKey);
+}
+
+function sizeOf(map, relativeKey) {
+  if (!relativeKey) return null;
+  return Object.prototype.hasOwnProperty.call(map, relativeKey) ? map[relativeKey] : null;
+}
+
+async function objectSizeMap() {
+  if (!cosStatus().ready) return {};
+  try {
+    const objects = await listObjects(CONFIG.cos.prefix);
+    const map = {};
+    objects.forEach(function (o) {
+      map[toRelativeKey(o.key)] = o.size;
+    });
+    return map;
+  } catch (e) {
+    return {};
+  }
 }
 
 function wrap(handler) {
@@ -221,7 +248,7 @@ app.delete("/api/expressions/:id", function (req, res) {
 
 /* ----------------------------- assets ----------------------------- */
 
-app.get("/api/assets", function (req, res) {
+app.get("/api/assets", wrap(async function (req, res) {
   const type = req.query.type;
   let rows;
   if (type) {
@@ -229,11 +256,16 @@ app.get("/api/assets", function (req, res) {
   } else {
     rows = db.prepare("SELECT * FROM assets ORDER BY type, sort_order, id").all();
   }
+  const sizes = await objectSizeMap();
   res.json(rows.map((r) => Object.assign({}, r, {
     url: signedUrl(r.asset_key),
     previewUrl: previewUrl(r.asset_key),
+    previewKey: r.preview_key || "",
+    previewAudioUrl: r.preview_key ? audioPreviewUrl(r.preview_key) : "",
+    size: sizeOf(sizes, r.asset_key),
+    previewSize: r.preview_key ? sizeOf(sizes, r.preview_key) : null,
   })));
-});
+}));
 
 app.post("/api/assets", function (req, res) {
   const body = req.body || {};
@@ -243,12 +275,13 @@ app.post("/api/assets", function (req, res) {
   if (!ASSET_TYPES.includes(type)) return badRequest(res, "invalid type: " + type);
   const t = nowIso();
   const info = db.prepare(`
-    INSERT INTO assets (type, name, asset_key, note, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO assets (type, name, asset_key, preview_key, note, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     type,
     name,
     cleanText(body.asset_key),
+    cleanText(body.preview_key),
     cleanText(body.note),
     nextSortOrder("assets", { column: "type", value: type }),
     t,
@@ -265,6 +298,7 @@ app.put("/api/assets/:id", function (req, res) {
     type: body.type !== undefined ? cleanText(body.type).trim() : existing.type,
     name: body.name !== undefined ? cleanText(body.name).trim() : existing.name,
     asset_key: body.asset_key !== undefined ? cleanText(body.asset_key) : existing.asset_key,
+    preview_key: body.preview_key !== undefined ? cleanText(body.preview_key) : existing.preview_key,
     note: body.note !== undefined ? cleanText(body.note) : existing.note,
     sort_order: body.sort_order !== undefined ? Number(body.sort_order) : existing.sort_order,
   };
@@ -272,8 +306,8 @@ app.put("/api/assets/:id", function (req, res) {
   if (!ASSET_TYPES.includes(next.type)) return badRequest(res, "invalid type: " + next.type);
   db.prepare(`
     UPDATE assets
-    SET type = @type, name = @name, asset_key = @asset_key, note = @note,
-        sort_order = @sort_order, updated_at = @updated_at
+    SET type = @type, name = @name, asset_key = @asset_key, preview_key = @preview_key,
+        note = @note, sort_order = @sort_order, updated_at = @updated_at
     WHERE id = @id
   `).run(Object.assign({}, next, { id: existing.id, updated_at: nowIso() }));
   res.json({ ok: true });
@@ -319,6 +353,36 @@ app.delete("/api/cos/objects", wrap(async function (req, res) {
   if (!relativeKey) return badRequest(res, "key is required");
   await deleteObject(relativeKey);
   res.json({ ok: true });
+}));
+
+/* ------------------------------- audio ------------------------------- */
+
+// Compress an already-uploaded audio object into a small mp3 preview variant
+// and store it alongside the original. The original is left untouched; callers
+// use the returned previewKey for cheap in-app playback.
+app.post("/api/audio/compress", wrap(async function (req, res) {
+  if (!cosStatus().ready) {
+    const err = new Error("COS credentials are not configured");
+    err.status = 503;
+    throw err;
+  }
+  const key = cleanText(req.body && req.body.key).trim().replace(/^\/+/, "");
+  if (!key) return badRequest(res, "key is required");
+  if (!(await ffmpegAvailable())) {
+    const err = new Error("ffmpeg is not available on the server");
+    err.status = 501;
+    throw err;
+  }
+  const original = await getObjectBuffer(key);
+  const compressed = await compressAudio(original);
+  if (!compressed || compressed.length === 0) {
+    const err = new Error("audio compression produced no output");
+    err.status = 502;
+    throw err;
+  }
+  const previewKey = previewKeyFor(key);
+  await putObject(previewKey, compressed, { contentType: PREVIEW_MIME });
+  res.json({ previewKey: previewKey, size: compressed.length });
 }));
 
 /* ------------------------------ script ------------------------------ */

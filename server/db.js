@@ -41,6 +41,7 @@ db.exec(`
     type       TEXT    NOT NULL,
     name       TEXT    NOT NULL,
     asset_key  TEXT    NOT NULL DEFAULT '',
+    preview_key TEXT   NOT NULL DEFAULT '',
     note       TEXT    NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT    NOT NULL,
@@ -58,6 +59,9 @@ function columnNames(table) {
 function migrate() {
   if (!columnNames("characters").includes("avatar_crop")) {
     db.exec("ALTER TABLE characters ADD COLUMN avatar_crop TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columnNames("assets").includes("preview_key")) {
+    db.exec("ALTER TABLE assets ADD COLUMN preview_key TEXT NOT NULL DEFAULT ''");
   }
 }
 

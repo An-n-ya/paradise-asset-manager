@@ -37,6 +37,7 @@
           <div class="list-head-title">
             <h1 id="list-title">角色</h1>
             <span class="pill" id="list-count">0</span>
+            <span class="pill" id="list-total" hidden></span>
           </div>
           <button class="icon-btn" id="add-btn" title="新建">+</button>
         </header>
@@ -50,6 +51,14 @@
     </div>
 
     <div class="script-app" id="view-script" hidden></div>
+  </div>
+
+  <div class="upload-overlay" id="upload-overlay" hidden>
+    <div class="upload-card">
+      <div class="upload-spinner" aria-hidden="true"></div>
+      <div class="upload-title" id="upload-title">正在上传…</div>
+      <div class="upload-sub" id="upload-sub"></div>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>

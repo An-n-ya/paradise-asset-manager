@@ -31,6 +31,9 @@ export const CONFIG = {
   scriptSource: process.env.SCRIPT_SOURCE || "",
   scriptDocPath: process.env.SCRIPT_DOC_PATH || "./data/script-doc.json",
   rosterPath: process.env.ROSTER_PATH || "./data/roster.json",
+  // Optional explicit path to an ffmpeg binary. When empty the audio module
+  // falls back to an optional "ffmpeg-static" dependency, then the system PATH.
+  ffmpegPath: process.env.FFMPEG_PATH || "",
   cos: {
     secretId: process.env.COS_SECRET_ID || "",
     secretKey: process.env.COS_SECRET_KEY || "",
