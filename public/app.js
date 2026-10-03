@@ -65,6 +65,8 @@ let blockMenuItems = [];
 let blockMenuShown = [];
 let blockMenuActive = 0;
 let blockMenuQuery = "";
+let listFocusPending = false;
+let scriptFocusPending = false;
 
 const el = {
   topTabs: document.getElementById("top-tabs"),
@@ -84,6 +86,10 @@ const el = {
   uploadOverlay: document.getElementById("upload-overlay"),
   uploadTitle: document.getElementById("upload-title"),
   uploadSub: document.getElementById("upload-sub"),
+  uploadSteps: document.getElementById("upload-steps"),
+  uploadBar: document.getElementById("upload-bar"),
+  uploadBarFill: document.getElementById("upload-bar-fill"),
+  dropHint: document.getElementById("drop-hint"),
   fileInput: document.getElementById("file-input"),
 };
 
@@ -189,17 +195,20 @@ function cropRectStyle(crop) {
   );
 }
 
+const CROP_SIDE_RATIO = 0.44;
+const CROP_CENTER_Y = 0.24;
+
 function defaultCrop(naturalWidth, naturalHeight) {
   const nw = naturalWidth || 1;
   const nh = naturalHeight || 1;
-  const side = Math.min(nw, nh);
-  const w = side / nw;
-  const h = side / nh;
+  const side = Math.min(nw, nh) * CROP_SIDE_RATIO;
+  const w = round4(clamp(side / nw, 0.05, 1));
+  const h = round4(clamp(side / nh, 0.05, 1));
   return {
     x: round4((1 - w) / 2),
-    y: round4((1 - h) * 0.08),
-    w: round4(w),
-    h: round4(h),
+    y: round4(clamp(CROP_CENTER_Y - h / 2, 0, 1 - h)),
+    w: w,
+    h: h,
   };
 }
 
@@ -215,18 +224,150 @@ function sizeText(bytes) {
 }
 
 let toastTimer = null;
-function toast(message, isError) {
-  el.toast.textContent = message;
-  el.toast.className = "toast show" + (isError ? " err" : "");
+let toastActionHandler = null;
+
+function dismissToast() {
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () {
-    el.toast.className = "toast";
-  }, 2200);
+  toastActionHandler = null;
+  el.toast.className = "toast";
 }
 
-function showUploadOverlay(title, sub) {
+function toast(message, options) {
+  if (typeof options === "boolean") options = { error: options };
+  options = options || {};
+  const isError = !!options.error;
+  const action = options.action;
+
+  el.toast.textContent = "";
+  const msg = document.createElement("span");
+  msg.className = "toast-msg";
+  msg.textContent = message;
+  el.toast.appendChild(msg);
+
+  toastActionHandler = null;
+  if (action && action.label) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "toast-action";
+    btn.textContent = action.label;
+    btn.addEventListener("click", function () {
+      const handler = toastActionHandler;
+      dismissToast();
+      if (typeof handler === "function") handler();
+    });
+    toastActionHandler = typeof action.onClick === "function" ? action.onClick : null;
+    el.toast.appendChild(btn);
+  }
+
+  el.toast.className = "toast show" + (isError ? " err" : "");
+  clearTimeout(toastTimer);
+  const duration = options.duration || (action ? 6500 : 2400);
+  toastTimer = setTimeout(dismissToast, duration);
+}
+
+let confirmNode = null;
+
+function confirmAction(options) {
+  options = options || {};
+  if (!confirmNode) confirmNode = document.getElementById("confirm-dialog");
+  const title = options.title || "确认操作";
+  const text = options.text || "";
+  const okText = options.okText || "确定";
+  const danger = options.danger !== false;
+
+  if (!confirmNode || typeof confirmNode.showModal !== "function") {
+    const plain = text ? title + "\n\n" + text : title;
+    return Promise.resolve(window.confirm(plain));
+  }
+
+  const titleEl = document.getElementById("confirm-title");
+  const textEl = document.getElementById("confirm-text");
+  const okEl = document.getElementById("confirm-ok");
+  if (titleEl) titleEl.textContent = title;
+  if (textEl) {
+    textEl.textContent = text;
+    textEl.hidden = !text;
+  }
+  if (okEl) {
+    okEl.textContent = okText;
+    okEl.classList.toggle("danger", danger);
+  }
+  confirmNode.classList.toggle("danger", danger);
+
+  return new Promise(function (resolve) {
+    let settled = false;
+    function onClose() {
+      if (settled) return;
+      settled = true;
+      confirmNode.removeEventListener("close", onClose);
+      resolve(confirmNode.returnValue === "confirm");
+    }
+    confirmNode.returnValue = "";
+    confirmNode.addEventListener("close", onClose);
+    confirmNode.showModal();
+  });
+}
+
+let uploadStepsState = [];
+
+function renderUploadSteps() {
+  if (!el.uploadSteps) return;
+  if (!uploadStepsState.length) {
+    el.uploadSteps.hidden = true;
+    el.uploadSteps.innerHTML = "";
+    return;
+  }
+  el.uploadSteps.hidden = false;
+  el.uploadSteps.innerHTML = uploadStepsState
+    .map(function (step) {
+      let cls = "upload-step";
+      if (step.state === "done") cls += " done";
+      else if (step.state === "current") cls += " current";
+      return (
+        '<div class="' + cls + '"><span class="step-dot" aria-hidden="true"></span>' +
+        "<span>" + escapeHtml(step.label) + "</span></div>"
+      );
+    })
+    .join("");
+}
+
+function setUploadSteps(labels) {
+  uploadStepsState = (labels || []).map(function (label, index) {
+    return { label: label, state: index === 0 ? "current" : "todo" };
+  });
+  renderUploadSteps();
+}
+
+function setUploadStep(index) {
+  uploadStepsState.forEach(function (step, i) {
+    step.state = i < index ? "done" : i === index ? "current" : "todo";
+  });
+  renderUploadSteps();
+}
+
+function finishUploadSteps() {
+  uploadStepsState.forEach(function (step) { step.state = "done"; });
+  renderUploadSteps();
+}
+
+function setUploadProgress(pct, indeterminate) {
+  if (!el.uploadBar || !el.uploadBarFill) return;
+  if (indeterminate) {
+    el.uploadBar.classList.add("upload-indeterminate");
+    el.uploadBar.removeAttribute("aria-valuenow");
+    return;
+  }
+  el.uploadBar.classList.remove("upload-indeterminate");
+  const value = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  el.uploadBar.setAttribute("aria-valuenow", String(value));
+  el.uploadBarFill.style.width = value + "%";
+}
+
+function showUploadOverlay(title, sub, steps) {
   el.uploadTitle.textContent = title || "正在上传…";
   el.uploadSub.textContent = sub || "";
+  setUploadSteps(steps || []);
+  setUploadProgress(0, false);
   el.uploadOverlay.hidden = false;
 }
 
@@ -237,6 +378,8 @@ function updateUploadOverlay(title, sub) {
 
 function hideUploadOverlay() {
   el.uploadOverlay.hidden = true;
+  uploadStepsState = [];
+  renderUploadSteps();
 }
 
 async function api(path, options) {
@@ -364,10 +507,11 @@ function countFor(item) {
 function renderNav() {
   el.nav.innerHTML = NAV.map(function (group) {
     const items = group.items.map(function (item) {
-      const active = item.view === state.view ? " active" : "";
+      const active = item.view === state.view;
       return (
-        '<button class="nav-item' + active + '" data-view="' + item.view + '">' +
-          '<span class="nav-icon">' + item.icon + "</span>" +
+        '<button class="nav-item' + (active ? " active" : "") + '" data-view="' + item.view + '"' +
+          (active ? ' aria-current="page"' : "") + '>' +
+          '<span class="nav-icon" aria-hidden="true">' + item.icon + "</span>" +
           '<span class="nav-label">' + escapeHtml(item.label) + "</span>" +
           '<span class="nav-count">' + countFor(item) + "</span>" +
         "</button>"
@@ -380,6 +524,8 @@ function renderNav() {
       "</div>"
     );
   }).join("");
+
+  applyNavRoving();
 
   const ready = state.status && state.status.cos && state.status.cos.ready;
   el.cosDot.className = "status-dot " + (ready ? "on" : "off");
@@ -398,6 +544,80 @@ function rowThumb(key, url, crop) {
     return '<div class="row-thumb">' + avatarImgHtml(url, crop) + "</div>";
   }
   return '<div class="row-thumb">' + iconFor(key) + "</div>";
+}
+
+function emptyStateHtml(nav) {
+  if (state.search) {
+    return (
+      '<div class="empty-state compact">' +
+        '<div class="empty-icon" aria-hidden="true">⌕</div>' +
+        '<div class="empty-title">未找到匹配项</div>' +
+        '<div class="empty-desc">没有与「' + escapeHtml(state.search) + '」相关的结果，试试其他关键词。</div>' +
+      "</div>"
+    );
+  }
+  if (nav.kind === "characters") {
+    return (
+      '<div class="empty-state">' +
+        '<div class="empty-icon" aria-hidden="true">' + nav.icon + "</div>" +
+        '<div class="empty-title">还没有角色</div>' +
+        '<div class="empty-desc">点击右上角 <span class="kbd">+</span> 新建角色，再为它添加表情差分。</div>' +
+      "</div>"
+    );
+  }
+  if (nav.kind === "bucket") {
+    return (
+      '<div class="empty-state">' +
+        '<div class="empty-icon" aria-hidden="true">' + nav.icon + "</div>" +
+        '<div class="empty-title">对象存储为空</div>' +
+        '<div class="empty-desc">当前前缀下没有任何对象。</div>' +
+      "</div>"
+    );
+  }
+  return (
+    '<div class="empty-state">' +
+      '<div class="empty-icon" aria-hidden="true">' + nav.icon + "</div>" +
+      '<div class="empty-title">还没有' + escapeHtml(nav.label) + "</div>" +
+      '<div class="empty-desc">点击右上角 <span class="kbd">+</span> 新建，或直接把文件拖到这里上传。</div>' +
+    "</div>"
+  );
+}
+
+function skeletonHtml(count) {
+  let rows = "";
+  for (let i = 0; i < count; i += 1) {
+    rows +=
+      '<div class="skel-row">' +
+        '<div class="skel-thumb skeleton"></div>' +
+        '<div class="skel-lines">' +
+          '<div class="skel-line skeleton w-70"></div>' +
+          '<div class="skel-line skeleton w-45"></div>' +
+        "</div>" +
+      "</div>";
+  }
+  return '<div class="pane-skeleton" aria-hidden="true">' + rows + "</div>";
+}
+
+function showListSkeleton(count) {
+  el.list.setAttribute("aria-busy", "true");
+  el.list.innerHTML = skeletonHtml(count || 7);
+  el.listCount.textContent = "…";
+  el.listTotal.hidden = true;
+}
+
+function showDetailSkeleton() {
+  el.detail.innerHTML = skeletonHtml(4);
+}
+
+function listErrorHtml(message) {
+  return (
+    '<div class="empty-state is-error">' +
+      '<div class="empty-icon" aria-hidden="true">!</div>' +
+      '<div class="empty-title">加载失败</div>' +
+      '<div class="empty-desc">' + escapeHtml(message || "无法连接到服务，请稍后重试。") + "</div>" +
+      '<button class="btn small empty-action" data-act="retry-load">重试</button>' +
+    "</div>"
+  );
 }
 
 function renderList() {
@@ -475,7 +695,134 @@ function renderList() {
   } else {
     el.listTotal.hidden = true;
   }
-  el.list.innerHTML = rows || '<div class="list-empty">暂无数据</div>';
+  el.list.removeAttribute("aria-busy");
+  el.list.innerHTML = rows || emptyStateHtml(nav);
+  syncListRoving();
+}
+
+function listRows() {
+  return Array.prototype.slice.call(el.list.querySelectorAll("[data-row]"));
+}
+
+function syncListRoving() {
+  applyRoving(el.list, "[data-row]");
+  if (listFocusPending) {
+    listFocusPending = false;
+    const active = el.list.querySelector("[data-row].active") || listRows()[0];
+    if (active) active.focus();
+  }
+}
+
+function applyRoving(container, itemSelector) {
+  if (!container) return;
+  const items = Array.prototype.slice.call(container.querySelectorAll(itemSelector));
+  if (!items.length) return;
+  let activeIdx = -1;
+  items.forEach(function (node, i) {
+    if (node.classList.contains("active")) activeIdx = i;
+  });
+  if (activeIdx === -1) activeIdx = 0;
+  items.forEach(function (node, i) {
+    node.setAttribute("role", "option");
+    node.setAttribute("aria-selected", node.classList.contains("active") ? "true" : "false");
+    node.tabIndex = i === activeIdx ? 0 : -1;
+  });
+}
+
+function applyNavRoving() {
+  if (!el.nav) return;
+  const items = Array.prototype.slice.call(el.nav.querySelectorAll("[data-view]"));
+  if (!items.length) return;
+  let activeIdx = 0;
+  items.forEach(function (node, i) {
+    if (node.classList.contains("active")) activeIdx = i;
+  });
+  items.forEach(function (node, i) { node.tabIndex = i === activeIdx ? 0 : -1; });
+}
+
+function focusRovingItem(container, itemSelector, node) {
+  const items = Array.prototype.slice.call(container.querySelectorAll(itemSelector));
+  items.forEach(function (n) { n.tabIndex = n === node ? 0 : -1; });
+  if (node) node.focus();
+}
+
+function activateListRow(row) {
+  if (!row) return;
+  const kind = row.dataset.row;
+  if (kind === "character") {
+    if (Number(row.dataset.id) !== state.selectedCharacterId) {
+      listFocusPending = true;
+      selectCharacter(Number(row.dataset.id)).catch(function (e) { toast(e.message, true); });
+    }
+  } else if (kind === "asset") {
+    if (Number(row.dataset.id) !== state.selectedAssetId) {
+      listFocusPending = true;
+      selectAsset(Number(row.dataset.id));
+    }
+  } else if (kind === "object") {
+    if (row.dataset.key !== state.selectedObjectKey) {
+      listFocusPending = true;
+      selectObject(row.dataset.key);
+    }
+  }
+}
+
+function focusablesIn(container, selector) {
+  if (!container) return [];
+  return Array.prototype.slice.call(container.querySelectorAll(selector));
+}
+
+function focusByIndex(items, index) {
+  if (!items.length) return;
+  const next = Math.max(0, Math.min(items.length - 1, index));
+  items.forEach(function (node, i) { node.tabIndex = i === next ? 0 : -1; });
+  items[next].focus();
+}
+
+function moveRovingFocus(event, container, selector) {
+  const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"];
+  if (keys.indexOf(event.key) === -1) return false;
+  const items = focusablesIn(container, selector);
+  if (!items.length) return false;
+  let index = items.indexOf(document.activeElement);
+  if (index === -1) index = 0;
+  if (event.key === "ArrowDown" || event.key === "ArrowRight") index += 1;
+  else if (event.key === "ArrowUp" || event.key === "ArrowLeft") index -= 1;
+  else if (event.key === "Home") index = 0;
+  else if (event.key === "End") index = items.length - 1;
+  event.preventDefault();
+  focusByIndex(items, index);
+  return true;
+}
+
+function isActivationKey(event) {
+  return event.key === "Enter" || event.key === " " || event.key === "Spacebar";
+}
+
+function selectExpressionRow(eid, focusField) {
+  if (eid == null) return;
+  if (eid === state.selectedExpressionId) return;
+  state.selectedExpressionId = eid;
+  renderDetail();
+  if (focusField) {
+    const input = el.detail.querySelector(
+      '[data-exp-row][data-exp-id="' + eid + '"] [data-exp-field="' + focusField + '"]'
+    );
+    if (input) input.focus();
+  }
+}
+
+function syncExpressionRoving() {
+  const rows = focusablesIn(el.detail, "[data-exp-row]");
+  if (!rows.length) return;
+  let activeIdx = -1;
+  rows.forEach(function (node, i) { if (node.classList.contains("active")) activeIdx = i; });
+  if (activeIdx === -1) activeIdx = 0;
+  rows.forEach(function (node, i) {
+    node.setAttribute("role", "group");
+    node.setAttribute("aria-current", node.classList.contains("active") ? "true" : "false");
+    node.tabIndex = i === activeIdx ? 0 : -1;
+  });
 }
 
 /* ---------------------------- detail ---------------------------- */
@@ -509,11 +856,19 @@ function previewHtml(key, url, previewUrl, opts) {
     : '<div class="preview-empty">未设置资源</div>';
 }
 
-function detailHeadAvatar(key, url, crop) {
-  if (url && categoryOf(key) === "image") {
-    return '<div class="detail-avatar">' + avatarImgHtml(url, crop) + "</div>";
+function detailHeadAvatar(key, url, crop, cropTarget) {
+  const isImage = !!(url && categoryOf(key) === "image");
+  const inner = isImage ? avatarImgHtml(url, crop) : iconFor(key);
+  if (cropTarget && isImage) {
+    return (
+      '<button type="button" class="detail-avatar detail-avatar-btn" data-act="open-crop" data-id="' +
+      cropTarget.id + '" title="剪裁对白头像" aria-label="剪裁对白头像">' +
+        inner +
+        '<span class="avatar-edit-hint" aria-hidden="true">剪裁</span>' +
+      "</button>"
+    );
   }
-  return '<div class="detail-avatar">' + iconFor(key) + "</div>";
+  return '<div class="detail-avatar">' + inner + "</div>";
 }
 
 function diffEditorHtml(c, expressions, selExp) {
@@ -521,21 +876,19 @@ function diffEditorHtml(c, expressions, selExp) {
   const imgUrl = (selExp && (selExp.previewUrl || selExp.url)) || c.avatarPreviewUrl || c.avatarUrl;
   const hasImage = imgUrl && categoryOf(activeKey) === "image";
   const crop = parseCrop(c.avatar_crop);
+  const avatarUrl = c.avatarPreviewUrl || c.avatarUrl || "";
   const fileName = activeKey ? activeKey.split("/").pop() : "";
   const selId = state.selectedExpressionId || "";
   const disabled = state.selectedExpressionId ? "" : " disabled";
 
   const stage = hasImage
-    ? '<div class="crop-stage" data-crop-stage>' +
-        '<img class="crop-source" data-crop-source src="' + escapeHtml(imgUrl) + '" alt="" />' +
-        '<div class="crop-rect" data-crop-rect style="' + cropRectStyle(crop) + '">' +
-          '<span class="crop-handle" data-crop-handle></span>' +
-        "</div>" +
+    ? '<div class="crop-stage is-static">' +
+        '<img class="crop-source" src="' + escapeHtml(imgUrl) + '" alt="" />' +
       "</div>"
     : '<div class="preview-box">' + previewHtml(c.avatar_key, c.avatarUrl, c.avatarPreviewUrl) + "</div>";
 
   return (
-    '<div class="diff-editor" data-crop-editor>' +
+    '<div class="diff-editor">' +
       '<aside class="diff-lists">' +
         '<div class="diff-pane-head"><span class="diff-pane-title">对白头像</span></div>' +
         '<div class="exp-list">' + (expressions || '<div class="list-empty">暂无表情</div>') + "</div>" +
@@ -551,9 +904,9 @@ function diffEditorHtml(c, expressions, selExp) {
       '<aside class="diff-side">' +
         '<div class="diff-block">' +
           '<div class="diff-block-title">对白头像</div>' +
-          '<div class="crop-preview-box" data-crop-preview>' + avatarImgHtml(imgUrl, crop) + "</div>" +
+          '<div class="crop-preview-box">' + avatarImgHtml(avatarUrl, crop) + "</div>" +
+          '<div class="diff-block-hint">点击上方角色头像可剪裁</div>' +
           '<button class="btn small" data-act="upload-character-avatar" data-id="' + c.id + '">选择图片</button>' +
-          '<button class="btn small" data-act="reset-avatar-crop" data-id="' + c.id + '">重置裁剪</button>' +
         "</div>" +
         '<div class="diff-block">' +
           '<div class="diff-block-title">资源操作</div>' +
@@ -597,7 +950,7 @@ function renderCharacterDetail() {
 
   return (
     '<div class="detail-head">' +
-      detailHeadAvatar(c.avatar_key, c.avatarPreviewUrl || c.avatarUrl, crop) +
+      detailHeadAvatar(c.avatar_key, c.avatarPreviewUrl || c.avatarUrl, crop, { id: c.id }) +
       '<div class="detail-head-main">' +
         "<h2>" + escapeHtml(c.display_name || c.name) + "</h2>" +
         '<div class="detail-head-sub">' + d.expressions.length + " 个表情</div>" +
@@ -698,14 +1051,12 @@ function renderObjectDetail() {
 }
 
 function renderDetail() {
-  if (cropAbort) {
-    cropAbort.abort();
-    cropAbort = null;
-  }
+  const cropDialog = document.getElementById("crop-dialog");
+  if (cropDialog && cropDialog.open) cropDialog.close();
   const nav = currentNav();
   if (nav.kind === "characters") {
     el.detail.innerHTML = renderCharacterDetail();
-    initCropEditor();
+    syncExpressionRoving();
   } else if (nav.kind === "assets") {
     el.detail.innerHTML = renderAssetDetail();
   } else {
@@ -713,27 +1064,50 @@ function renderDetail() {
   }
 }
 
-function initCropEditor() {
-  const editor = el.detail.querySelector("[data-crop-editor]");
-  if (!editor) return;
-  const stage = editor.querySelector("[data-crop-stage]");
-  const source = editor.querySelector("[data-crop-source]");
-  const rectEl = editor.querySelector("[data-crop-rect]");
-  const handle = editor.querySelector("[data-crop-handle]");
-  if (!stage || !source || !rectEl || !handle) return;
-  const previewBox = editor.querySelector("[data-crop-preview]");
-  const resetBtn = editor.querySelector('[data-act="reset-avatar-crop"]');
-  const hidden = document.querySelector('#char-form [data-field="avatar_crop"]');
-  const url = source.getAttribute("src");
+function refreshHeadAvatar(url, crop) {
+  const btn = el.detail.querySelector(".detail-avatar-btn");
+  if (!btn) return;
+  const hint = btn.querySelector(".avatar-edit-hint");
+  btn.innerHTML = avatarImgHtml(url, crop) + (hint ? hint.outerHTML : "");
+}
+
+function openCropModal() {
+  const dialog = document.getElementById("crop-dialog");
+  const stage = document.getElementById("crop-stage");
+  const source = document.getElementById("crop-source");
+  const rectEl = document.getElementById("crop-rect");
+  const handle = document.getElementById("crop-handle");
+  const previewBox = document.getElementById("crop-preview");
+  if (!dialog || !stage || !source || !rectEl || !handle || !previewBox) return;
+  if (typeof dialog.showModal !== "function") return;
+
+  const d = state.detail;
+  const c = d && d.character;
+  if (!c) return;
+  const avatarUrl = c.avatarPreviewUrl || c.avatarUrl || "";
+  if (!avatarUrl) {
+    toast("该角色尚未设置立绘，无法剪裁", { error: true });
+    return;
+  }
+
+  if (cropAbort) {
+    cropAbort.abort();
+    cropAbort = null;
+  }
   const abort = new AbortController();
   cropAbort = abort;
+  const sig = { signal: abort.signal };
 
+  source.setAttribute("src", avatarUrl);
+  const dialogTitle = document.getElementById("crop-dialog-title");
+  if (dialogTitle) dialogTitle.textContent = "剪裁对白头像 · " + (c.display_name || c.name);
+
+  const hidden = document.querySelector('#char-form [data-field="avatar_crop"]');
   let crop = parseCrop(hidden ? hidden.value : "");
 
   function paint() {
     rectEl.style.cssText = cropRectStyle(crop);
-    previewBox.innerHTML = avatarImgHtml(url, crop);
-    if (hidden) hidden.value = serializeCrop(crop);
+    previewBox.innerHTML = avatarImgHtml(avatarUrl, crop);
   }
 
   function applyDefault() {
@@ -746,7 +1120,7 @@ function initCropEditor() {
   } else if (source.complete && source.naturalWidth) {
     applyDefault();
   } else {
-    source.addEventListener("load", applyDefault, { once: true });
+    source.addEventListener("load", applyDefault, { once: true, signal: abort.signal });
   }
 
   let drag = null;
@@ -757,7 +1131,7 @@ function initCropEditor() {
     drag = { mode: "move", x: event.clientX, y: event.clientY, start: crop, rw: r.width, rh: r.height };
     rectEl.setPointerCapture(event.pointerId);
     event.preventDefault();
-  });
+  }, sig);
 
   handle.addEventListener("pointerdown", function (event) {
     const r = stage.getBoundingClientRect();
@@ -765,7 +1139,7 @@ function initCropEditor() {
     handle.setPointerCapture(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
-  });
+  }, sig);
 
   function onMove(event) {
     if (!drag) return;
@@ -797,15 +1171,30 @@ function initCropEditor() {
     drag = null;
   }
 
-  window.addEventListener("pointermove", onMove, { signal: abort.signal });
-  window.addEventListener("pointerup", onUp, { signal: abort.signal });
-  window.addEventListener("pointercancel", onUp, { signal: abort.signal });
+  window.addEventListener("pointermove", onMove, sig);
+  window.addEventListener("pointerup", onUp, sig);
+  window.addEventListener("pointercancel", onUp, sig);
 
-  if (resetBtn) {
-    resetBtn.addEventListener("click", function () {
-      applyDefault();
-    });
+  function commit() {
+    if (hidden) hidden.value = serializeCrop(crop);
+    refreshHeadAvatar(avatarUrl, crop);
   }
+
+  const applyBtn = document.getElementById("crop-apply");
+  const cancelBtn = document.getElementById("crop-cancel");
+  const resetBtn = document.getElementById("crop-reset");
+  const closeBtn = document.getElementById("crop-close");
+  if (applyBtn) applyBtn.addEventListener("click", function () { commit(); dialog.close(); }, sig);
+  if (cancelBtn) cancelBtn.addEventListener("click", function () { dialog.close(); }, sig);
+  if (closeBtn) closeBtn.addEventListener("click", function () { dialog.close(); }, sig);
+  if (resetBtn) resetBtn.addEventListener("click", function () { applyDefault(); }, sig);
+
+  dialog.addEventListener("close", function () {
+    if (cropAbort === abort) cropAbort = null;
+    abort.abort();
+  }, { once: true });
+
+  dialog.showModal();
 }
 
 function render() {
@@ -1536,7 +1925,19 @@ function scriptListInner() {
       l.id.toLowerCase().indexOf(q) !== -1 ||
       String(l.no || "").toLowerCase().indexOf(q) !== -1;
   });
-  if (!labels.length) return '<div class="list-empty">暂无章节</div>';
+  if (!labels.length) {
+    return state.scriptSearch
+      ? '<div class="empty-state compact">' +
+          '<div class="empty-icon" aria-hidden="true">⌕</div>' +
+          '<div class="empty-title">未找到章节</div>' +
+          '<div class="empty-desc">没有与「' + escapeHtml(state.scriptSearch) + '」匹配的场景。</div>' +
+        "</div>"
+      : '<div class="empty-state">' +
+          '<div class="empty-icon" aria-hidden="true">▤</div>' +
+          '<div class="empty-title">还没有场景</div>' +
+          '<div class="empty-desc">点击右上角 <span class="kbd">+</span> 新建一个场景开始编写。</div>' +
+        "</div>";
+  }
   return labels.map(function (l) {
     const active = l.id === state.scriptLabelId ? " active" : "";
     const bg = labelViewFromBlocks(labelBlocks(l.id)).background;
@@ -1559,17 +1960,30 @@ function scriptLabelsInner() {
   return (
     '<header class="list-head">' +
       '<div class="list-head-title">' +
-        "<h1>剧本</h1>" +
+        '<h1 id="script-list-title">剧本</h1>' +
         '<span class="pill" data-script-label-count>' + scriptLabelList().length + "</span>" +
       "</div>" +
-      '<button class="icon-btn" data-act="add-scene" title="新增场景">+</button>' +
+      '<button class="icon-btn" data-act="add-scene" title="新增场景" aria-label="新增场景">+</button>' +
     "</header>" +
     '<div class="list-search">' +
-      '<input data-script-search type="text" placeholder="搜索章节…" autocomplete="off" value="' +
+      '<label class="sr-only" for="script-search-input">搜索场景</label>' +
+      '<input id="script-search-input" data-script-search type="text" placeholder="搜索场景…" autocomplete="off" value="' +
         escapeHtml(state.scriptSearch) + '" />' +
     "</div>" +
-    '<div class="list" data-script-label-list></div>'
+    '<div class="list" data-script-label-list role="listbox" aria-label="场景列表"></div>'
   );
+}
+
+function renderLabelList() {
+  if (!scriptEls || !scriptEls.labelList) return;
+  scriptEls.labelList.innerHTML = scriptListInner();
+  applyRoving(scriptEls.labelList, "[data-label]");
+  if (scriptFocusPending) {
+    scriptFocusPending = false;
+    const active = scriptEls.labelList.querySelector("[data-label].active") ||
+      scriptEls.labelList.querySelector("[data-label]");
+    if (active) active.focus();
+  }
 }
 
 function scriptEditorInner() {
@@ -1602,7 +2016,9 @@ function cacheScriptEls() {
 
 function renderScript() {
   if (!state.script) {
-    el.viewScript.innerHTML = '<div class="script-empty">加载中…</div>';
+    el.viewScript.innerHTML =
+      '<section class="list-pane"><div class="list">' + skeletonHtml(6) + "</div></section>" +
+      '<aside class="script-editor"><div class="blocks">' + skeletonHtml(5) + "</div></aside>";
     return;
   }
   el.viewScript.innerHTML =
@@ -1612,9 +2028,26 @@ function renderScript() {
   updateScriptPanes();
 }
 
+function renderScriptError(message) {
+  scriptEls = null;
+  el.viewScript.innerHTML =
+    '<section class="list-pane"></section>' +
+    '<aside class="script-editor">' +
+      '<div class="empty-state is-error detail-empty-state">' +
+        '<div class="empty-icon" aria-hidden="true">!</div>' +
+        '<div class="empty-title">剧本加载失败</div>' +
+        '<div class="empty-desc">' + escapeHtml(message || "无法读取剧本数据，请稍后重试。") + "</div>" +
+        '<button class="btn small empty-action" data-act="retry-script">重试</button>' +
+      "</div>" +
+    "</aside>";
+}
+
 function updateScriptPanes() {
   if (!scriptEls || !state.script) return;
-  if (scriptEls.labelList) scriptEls.labelList.innerHTML = scriptListInner();
+  if (scriptEls.labelList) {
+    scriptEls.labelList.innerHTML = scriptListInner();
+    applyRoving(scriptEls.labelList, "[data-label]");
+  }
   if (scriptEls.labelCount) scriptEls.labelCount.textContent = String(scriptLabelList().length);
   updateScriptStatus();
   renderEditor();
@@ -1634,7 +2067,10 @@ function updateScriptStatus() {
 
 function updateScriptMeta() {
   if (!scriptEls || !state.script) return;
-  if (scriptEls.labelList) scriptEls.labelList.innerHTML = scriptListInner();
+  if (scriptEls.labelList) {
+    scriptEls.labelList.innerHTML = scriptListInner();
+    applyRoving(scriptEls.labelList, "[data-label]");
+  }
   updateScriptStatus();
 }
 
@@ -1660,7 +2096,15 @@ async function refreshScript() {
 }
 
 async function ensureScript() {
-  if (!state.script) await refreshScript();
+  if (!state.script) {
+    if (!el.viewScript.querySelector(".pane-skeleton")) renderScript();
+    try {
+      await refreshScript();
+    } catch (err) {
+      renderScriptError(err.message);
+      throw err;
+    }
+  }
   const mounted = scriptEls && el.viewScript.contains(scriptEls.blocks);
   if (!mounted) renderScript();
   else updateScriptPanes();
@@ -1715,7 +2159,12 @@ async function removeScene() {
   if (!state.scriptLabelId) return;
   const target = scriptLabelList().find(function (l) { return l.id === state.scriptLabelId; });
   const name = target ? target.no + " · " + target.title : state.scriptLabelId;
-  if (!window.confirm("确定删除「" + name + "」吗？此操作不可撤销。")) return;
+  const ok = await confirmAction({
+    title: "删除场景「" + name + "」？",
+    text: "该场景及其全部剧本块将被移除，此操作不可撤销。",
+    okText: "删除场景",
+  });
+  if (!ok) return;
   closeBlockMenu();
   clearTimeout(scriptSaveTimer);
   try {
@@ -1742,13 +2191,16 @@ async function switchTab(tab) {
   }
   state.tab = tab;
   Array.prototype.forEach.call(document.querySelectorAll(".top-tab"), function (btn) {
-    btn.classList.toggle("active", btn.dataset.tab === tab);
+    const on = btn.dataset.tab === tab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
   });
   const isScript = tab === "script";
   el.viewAssets.hidden = isScript;
   el.viewScript.hidden = !isScript;
   if (isScript) {
-    ensureScript().catch(function (e) { toast(e.message, true); });
+    ensureScript().catch(function () {});
   }
 }
 
@@ -1803,14 +2255,23 @@ async function saveCharacter(id) {
 }
 
 async function deleteCharacter(id) {
-  if (!confirm("确定删除该角色及其全部表情？")) return;
+  const char = state.characters.find(function (c) { return c.id === Number(id); });
+  const name = char ? (char.display_name || char.name) : "该角色";
+  const count = char ? char.expression_count : 0;
+  const hint = count ? "，其 " + count + " 个表情也会被一并删除" : "";
+  const ok = await confirmAction({
+    title: "删除「" + name + "」？",
+    text: "确定删除该角色" + hint + "。此操作不可撤销。",
+    okText: "删除角色",
+  });
+  if (!ok) return;
   try {
     await api("/api/characters/" + id, { method: "DELETE" });
     state.selectedCharacterId = null;
     state.detail = null;
     await refreshData();
     renderDetail();
-    toast("已删除");
+    toast("已删除「" + name + "」");
   } catch (err) {
     toast(err.message, true);
   }
@@ -1847,12 +2308,47 @@ async function saveExpression(id) {
 }
 
 async function deleteExpression(id) {
-  if (!confirm("确定删除该表情？")) return;
+  const list = (state.detail && state.detail.expressions) || [];
+  const target = list.find(function (e) { return e.id === Number(id); });
+  const snapshot = target ? {
+    characterId: state.selectedCharacterId,
+    name: target.name,
+    asset_key: target.asset_key || "",
+    note: target.note || "",
+    sort_order: target.sort_order,
+  } : null;
+  const label = target ? target.name : "该表情";
   try {
     await api("/api/expressions/" + id, { method: "DELETE" });
     await refreshData();
     await selectCharacter(state.selectedCharacterId);
-    toast("已删除");
+    toast("已删除表情「" + label + "」", {
+      action: { label: "撤销", onClick: function () { restoreExpression(snapshot); } },
+    });
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function restoreExpression(snapshot) {
+  if (!snapshot || snapshot.characterId === null || snapshot.characterId === undefined) return;
+  try {
+    const created = await api("/api/characters/" + snapshot.characterId + "/expressions", {
+      method: "POST",
+      body: { name: snapshot.name },
+    });
+    await api("/api/expressions/" + created.id, {
+      method: "PUT",
+      body: {
+        name: snapshot.name,
+        asset_key: snapshot.asset_key,
+        note: snapshot.note,
+        sort_order: snapshot.sort_order,
+      },
+    });
+    await refreshData();
+    await selectCharacter(Number(snapshot.characterId));
+    toast("已恢复表情「" + snapshot.name + "」");
   } catch (err) {
     toast(err.message, true);
   }
@@ -1872,20 +2368,62 @@ async function saveAsset(id) {
 }
 
 async function deleteAsset(id) {
-  if (!confirm("确定删除该资源？")) return;
+  const asset = state.assets.find(function (a) { return a.id === Number(id); });
+  const snapshot = asset ? {
+    type: asset.type,
+    name: asset.name,
+    asset_key: asset.asset_key || "",
+    preview_key: asset.previewKey || asset.preview_key || "",
+    note: asset.note || "",
+    sort_order: asset.sort_order,
+  } : null;
+  const label = asset ? asset.name : "该资源";
   try {
     await api("/api/assets/" + id, { method: "DELETE" });
     state.selectedAssetId = null;
     await refreshData();
     renderDetail();
-    toast("已删除");
+    toast("已删除「" + label + "」", {
+      action: { label: "撤销", onClick: function () { restoreAsset(snapshot); } },
+    });
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function restoreAsset(snapshot) {
+  if (!snapshot) return;
+  try {
+    const created = await api("/api/assets", {
+      method: "POST",
+      body: { type: snapshot.type, name: snapshot.name },
+    });
+    await api("/api/assets/" + created.id, {
+      method: "PUT",
+      body: {
+        type: snapshot.type,
+        name: snapshot.name,
+        asset_key: snapshot.asset_key,
+        preview_key: snapshot.preview_key,
+        note: snapshot.note,
+        sort_order: snapshot.sort_order,
+      },
+    });
+    await refreshData();
+    selectAsset(Number(created.id));
+    toast("已恢复「" + snapshot.name + "」");
   } catch (err) {
     toast(err.message, true);
   }
 }
 
 async function deleteObject(key) {
-  if (!confirm("确定从对象存储中删除该对象？")) return;
+  const ok = await confirmAction({
+    title: "从对象存储删除？",
+    text: "将永久删除「" + key + "」，此操作不可撤销，且不会同步删除本地数据库中的记录。",
+    okText: "永久删除",
+  });
+  if (!ok) return;
   try {
     await api("/api/cos/objects?key=" + encodeURIComponent(key), { method: "DELETE" });
     state.selectedObjectKey = null;
@@ -1921,30 +2459,46 @@ async function handleFile(file) {
   pendingUpload = null;
   if (!target || !file) return;
   const name = safeFileName(file.name);
+  const sizeLabel = humanSize(file.size);
   const onProgress = function (loaded, total) {
-    const pct = total ? Math.round((loaded / total) * 100) : 0;
-    updateUploadOverlay("正在上传 " + name, humanSize(file.size) + " · " + pct + "%");
+    const pct = total ? (loaded / total) * 100 : 0;
+    setUploadProgress(pct, false);
+    updateUploadOverlay("正在上传 " + name, sizeLabel + " · " + Math.round(pct) + "%");
   };
-  showUploadOverlay("正在上传 " + name, humanSize(file.size) + " · 0%");
   try {
     if (target.kind === "character-avatar") {
+      showUploadOverlay("正在上传 " + name, sizeLabel, ["上传文件", "更新角色"]);
       const key = "images/" + name;
       await uploadToCos(file, key, onProgress);
+      setUploadStep(1);
+      setUploadProgress(100, false);
       await api("/api/characters/" + target.id, { method: "PUT", body: { avatar_key: key } });
+      finishUploadSteps();
       await refreshData();
       await selectCharacter(Number(target.id));
     } else if (target.kind === "expression") {
+      showUploadOverlay("正在上传 " + name, sizeLabel, ["上传文件", "更新表情"]);
       const key = "images/" + name;
       await uploadToCos(file, key, onProgress);
+      setUploadStep(1);
+      setUploadProgress(100, false);
       await api("/api/expressions/" + target.id, { method: "PUT", body: { asset_key: key } });
+      finishUploadSteps();
       await refreshData();
       await selectCharacter(state.selectedCharacterId);
     } else if (target.kind === "asset") {
       const asset = state.assets.find(function (a) { return a.id === target.id; });
       const key = dirForType(asset ? asset.type : "") + name;
+      const isAudio = categoryOf(key) === "audio";
+      const steps = isAudio
+        ? ["上传文件", "生成音频预览", "更新资源"]
+        : ["上传文件", "更新资源"];
+      showUploadOverlay("正在上传 " + name, sizeLabel, steps);
       await uploadToCos(file, key, onProgress);
       let previewKey = "";
-      if (categoryOf(key) === "audio") {
+      if (isAudio) {
+        setUploadStep(1);
+        setUploadProgress(0, true);
         updateUploadOverlay("正在压缩音频…", name);
         try {
           const compressed = await api("/api/audio/compress", {
@@ -1958,7 +2512,10 @@ async function handleFile(file) {
           console.warn("audio compression skipped:", err.message);
         }
       }
+      setUploadStep(isAudio ? 2 : 1);
+      setUploadProgress(100, false);
       await api("/api/assets/" + target.id, { method: "PUT", body: { asset_key: key, preview_key: previewKey } });
+      finishUploadSteps();
       await refreshData();
       selectAsset(Number(target.id));
     }
@@ -1970,17 +2527,105 @@ async function handleFile(file) {
   }
 }
 
+/* ---------------------------- drag and drop ---------------------------- */
+
+let dragDepth = 0;
+
+function dragHasFiles(event) {
+  const dt = event.dataTransfer;
+  if (!dt) return false;
+  const types = dt.types ? Array.prototype.slice.call(dt.types) : [];
+  return types.indexOf("Files") !== -1;
+}
+
+function currentDropTarget() {
+  const nav = currentNav();
+  if (!nav) return null;
+  if (nav.kind === "characters" && state.selectedCharacterId) {
+    const char = state.characters.find(function (c) {
+      return c.id === Number(state.selectedCharacterId);
+    });
+    const who = char ? char.display_name || char.name : "";
+    return {
+      kind: "character-avatar",
+      id: state.selectedCharacterId,
+      hint: "松开以更新「" + who + "」的头像",
+    };
+  }
+  if (nav.kind === "assets" && state.selectedAssetId) {
+    const asset = state.assets.find(function (a) {
+      return a.id === Number(state.selectedAssetId);
+    });
+    const label = asset ? asset.name : "";
+    return {
+      kind: "asset",
+      id: state.selectedAssetId,
+      hint: "松开以替换「" + label + "」的文件",
+    };
+  }
+  return null;
+}
+
+function showDropZone(on) {
+  if (!el.viewAssets) return;
+  el.viewAssets.classList.toggle("drop-active", !!on);
+}
+
+function handleDropFiles(fileList) {
+  const file = fileList && fileList[0];
+  if (!file) return;
+  const target = currentDropTarget();
+  if (!target) {
+    toast("请先在左侧选择要更新的条目", true);
+    return;
+  }
+  pendingUpload = target;
+  handleFile(file);
+}
+
+const viewAssetsEl = el.viewAssets;
+if (viewAssetsEl) {
+  viewAssetsEl.addEventListener("dragenter", function (event) {
+    if (!dragHasFiles(event)) return;
+    event.preventDefault();
+    dragDepth += 1;
+    const target = currentDropTarget();
+    if (el.dropHint) {
+      el.dropHint.textContent = target ? target.hint : "请先在左侧选择要更新的条目";
+    }
+    showDropZone(true);
+  });
+  viewAssetsEl.addEventListener("dragover", function (event) {
+    if (!dragHasFiles(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  viewAssetsEl.addEventListener("dragleave", function (event) {
+    if (!dragHasFiles(event)) return;
+    dragDepth -= 1;
+    if (dragDepth <= 0) {
+      dragDepth = 0;
+      showDropZone(false);
+    }
+  });
+  viewAssetsEl.addEventListener("drop", function (event) {
+    if (!dragHasFiles(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    showDropZone(false);
+    handleDropFiles(event.dataTransfer ? event.dataTransfer.files : null);
+  });
+}
+
 /* ---------------------------- events ---------------------------- */
 
-el.nav.addEventListener("click", function (event) {
-  const btn = event.target.closest("[data-view]");
-  if (!btn) return;
-  const view = btn.dataset.view;
-  if (view === state.view) return;
+function openNavView(view, focusList) {
+  if (!view || view === state.view) return;
   state.view = view;
   state.search = "";
   el.searchInput.value = "";
   state.detail = null;
+  listFocusPending = !!focusList;
   const nav = currentNav();
   if (nav.kind === "characters" && state.characters[0]) {
     refreshData().then(function () {
@@ -1994,34 +2639,44 @@ el.nav.addEventListener("click", function (event) {
   } else {
     render();
   }
+}
+
+el.nav.addEventListener("click", function (event) {
+  const btn = event.target.closest("[data-view]");
+  if (!btn) return;
+  openNavView(btn.dataset.view, event.detail === 0);
+});
+
+el.nav.addEventListener("keydown", function (event) {
+  moveRovingFocus(event, el.nav, "[data-view]");
 });
 
 el.list.addEventListener("click", function (event) {
+  if (event.target.closest('[data-act="retry-load"]')) {
+    boot();
+    return;
+  }
   const row = event.target.closest("[data-row]");
   if (!row) return;
-  const kind = row.dataset.row;
-  if (kind === "character") {
-    selectCharacter(Number(row.dataset.id)).catch(function (e) { toast(e.message, true); });
-  } else if (kind === "asset") {
-    selectAsset(Number(row.dataset.id));
-  } else if (kind === "object") {
-    selectObject(row.dataset.key);
+  activateListRow(row);
+});
+
+el.list.addEventListener("keydown", function (event) {
+  const row = event.target.closest("[data-row]");
+  if (!row) return;
+  if (isActivationKey(event)) {
+    event.preventDefault();
+    activateListRow(row);
+    return;
   }
+  moveRovingFocus(event, el.list, "[data-row]");
 });
 
 el.detail.addEventListener("click", function (event) {
   const expRow = event.target.closest("[data-exp-row]");
   if (expRow) {
-    const eid = Number(expRow.dataset.expId);
-    if (eid !== state.selectedExpressionId) {
-      const field = event.target.closest("[data-exp-field]");
-      state.selectedExpressionId = eid;
-      renderDetail();
-      if (field) {
-        const next = el.detail.querySelector('[data-exp-row][data-exp-id="' + eid + '"] [data-exp-field="' + field.dataset.expField + '"]');
-        if (next) next.focus();
-      }
-    }
+    const field = event.target.closest("[data-exp-field]");
+    selectExpressionRow(Number(expRow.dataset.expId), field ? field.dataset.expField : null);
     return;
   }
   const btn = event.target.closest("[data-act]");
@@ -2030,6 +2685,7 @@ el.detail.addEventListener("click", function (event) {
   const id = btn.dataset.id;
   if (act === "save-character") return saveCharacter(id);
   if (act === "delete-character") return deleteCharacter(id);
+  if (act === "open-crop") return openCropModal();
   if (act === "upload-character-avatar") return openPicker({ kind: "character-avatar", id: Number(id) });
   if (act === "add-expression") return addExpression(id);
   if (act === "save-expression") return saveExpression(id);
@@ -2050,6 +2706,28 @@ el.detail.addEventListener("change", function (event) {
   saveExpression(row.dataset.expId);
 });
 
+el.detail.addEventListener("keydown", function (event) {
+  const expRow = event.target.closest("[data-exp-row]");
+  if (!expRow || event.target !== expRow) return;
+  const eid = Number(expRow.dataset.expId);
+  if (isActivationKey(event)) {
+    event.preventDefault();
+    if (eid !== state.selectedExpressionId) {
+      state.selectedExpressionId = eid;
+      renderDetail();
+      const next = el.detail.querySelector('[data-exp-row][data-exp-id="' + eid + '"]');
+      if (next) next.focus();
+    } else {
+      const input = el.detail.querySelector(
+        '[data-exp-row][data-exp-id="' + eid + '"] [data-exp-field="name"]'
+      );
+      if (input) input.focus();
+    }
+    return;
+  }
+  moveRovingFocus(event, el.detail, "[data-exp-row]");
+});
+
 el.addBtn.addEventListener("click", addItem);
 
 el.searchInput.addEventListener("input", function () {
@@ -2062,10 +2740,79 @@ el.fileInput.addEventListener("change", function () {
   if (file) handleFile(file);
 });
 
+function isTypingTarget(node) {
+  if (!node || !node.tagName) return false;
+  const tag = node.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || node.isContentEditable === true;
+}
+
+function focusSearch() {
+  if (state.tab !== "assets") switchTab("assets");
+  el.searchInput.focus();
+  el.searchInput.select();
+}
+
+document.addEventListener("keydown", function (event) {
+  const meta = event.metaKey || event.ctrlKey;
+  if (meta && String(event.key).toLowerCase() === "k") {
+    event.preventDefault();
+    focusSearch();
+    return;
+  }
+  if (isTypingTarget(event.target)) {
+    if (event.key === "Escape" && event.target === el.searchInput && el.searchInput.value) {
+      el.searchInput.value = "";
+      state.search = "";
+      renderList();
+    }
+    return;
+  }
+  if (meta || event.altKey) return;
+  if (event.key === "/") {
+    if (state.tab !== "assets") return;
+    event.preventDefault();
+    focusSearch();
+  } else if (event.key === "n" || event.key === "N") {
+    if (state.tab !== "assets") return;
+    const nav = currentNav();
+    if (!nav || nav.kind === "bucket") return;
+    event.preventDefault();
+    addItem();
+  } else if (event.key === "Escape" && state.tab === "assets" && el.searchInput.value) {
+    el.searchInput.value = "";
+    state.search = "";
+    renderList();
+  }
+});
+
 el.topTabs.addEventListener("click", function (event) {
   const btn = event.target.closest("[data-tab]");
   if (!btn) return;
   switchTab(btn.dataset.tab);
+});
+
+el.topTabs.addEventListener("keydown", function (event) {
+  const tabs = Array.prototype.slice.call(el.topTabs.querySelectorAll("[data-tab]"));
+  if (!tabs.length) return;
+  let index = tabs.indexOf(document.activeElement);
+  if (index === -1) index = 0;
+  if (event.key === "ArrowRight") index = (index + 1) % tabs.length;
+  else if (event.key === "ArrowLeft") index = (index - 1 + tabs.length) % tabs.length;
+  else if (event.key === "Home") index = 0;
+  else if (event.key === "End") index = tabs.length - 1;
+  else if (isActivationKey(event)) {
+    event.preventDefault();
+    const btn = event.target.closest("[data-tab]");
+    if (btn) switchTab(btn.dataset.tab);
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  const next = tabs[index];
+  tabs.forEach(function (b) { b.tabIndex = b === next ? 0 : -1; });
+  next.focus();
+  switchTab(next.dataset.tab);
 });
 
 el.viewScript.addEventListener("input", function (event) {
@@ -2091,7 +2838,8 @@ el.viewScript.addEventListener("input", function (event) {
   }
   if (target.matches("[data-script-search]")) {
     state.scriptSearch = target.value;
-    if (scriptEls && scriptEls.labelList) scriptEls.labelList.innerHTML = scriptListInner();
+    renderLabelList();
+    return;
   }
 });
 
@@ -2109,17 +2857,46 @@ el.viewScript.addEventListener("keydown", function (event) {
   openBlockMenu(ctx);
 });
 
+el.viewScript.addEventListener("keydown", function (event) {
+  const labelRow = event.target.closest("[data-label]");
+  if (!labelRow || event.target !== labelRow) return;
+  if (isActivationKey(event)) {
+    event.preventDefault();
+    selectScriptLabel(labelRow.dataset.label, true);
+    return;
+  }
+  moveRovingFocus(event, scriptEls && scriptEls.labelList, "[data-label]");
+});
+
+function selectScriptLabel(id, focusList) {
+  if (!id) return;
+  if (id === state.scriptLabelId) {
+    if (focusList) {
+      scriptFocusPending = true;
+      renderLabelList();
+    }
+    return;
+  }
+  closeBlockMenu();
+  state.scriptLabelId = id;
+  scriptFocusPending = !!focusList;
+  updateScriptPanes();
+  if (focusList) renderLabelList();
+}
+
 el.viewScript.addEventListener("click", function (event) {
   const labelRow = event.target.closest("[data-label]");
   if (labelRow) {
-    closeBlockMenu();
-    state.scriptLabelId = labelRow.dataset.label;
-    updateScriptPanes();
+    selectScriptLabel(labelRow.dataset.label, false);
     return;
   }
   const btn = event.target.closest("[data-act]");
   if (!btn) return;
   const act = btn.dataset.act;
+  if (act === "retry-script") {
+    ensureScript().catch(function (e) { toast(e.message, true); });
+    return;
+  }
   if (act === "save-script") {
     saveScript();
     return;
@@ -2162,10 +2939,22 @@ window.addEventListener("beforeunload", function () {
 
 /* ---------------------------- boot ---------------------------- */
 
-refreshData()
-  .then(function () {
+async function boot() {
+  showListSkeleton(7);
+  showDetailSkeleton();
+  try {
+    await refreshData();
     if (state.view === "characters" && state.characters[0]) {
-      return selectCharacter(state.characters[0].id);
+      await selectCharacter(state.characters[0].id);
     }
-  })
-  .catch(function (err) { toast(err.message, true); });
+  } catch (err) {
+    el.list.removeAttribute("aria-busy");
+    el.list.innerHTML = listErrorHtml(err.message);
+    el.listCount.textContent = "0";
+    el.listTotal.hidden = true;
+    el.detail.innerHTML = "";
+    toast(err.message, true);
+  }
+}
+
+boot();

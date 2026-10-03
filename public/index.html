@@ -7,61 +7,115 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <a class="skip-link" href="#list-pane">跳到主内容</a>
+
   <header class="topbar">
     <div class="topbar-brand">
       <span class="brand-dot"></span>
       <span class="topbar-brand-name">失乐园 · 制作台</span>
     </div>
-    <nav class="topbar-tabs" id="top-tabs">
-      <button class="top-tab active" data-tab="assets">资产管理</button>
-      <button class="top-tab" data-tab="script">剧本</button>
-    </nav>
+    <div class="topbar-tabs" id="top-tabs" role="tablist" aria-label="主导航">
+      <button class="top-tab active" id="tab-assets" data-tab="assets" role="tab" aria-selected="true" aria-controls="view-assets" tabindex="0">资产管理</button>
+      <button class="top-tab" id="tab-script" data-tab="script" role="tab" aria-selected="false" aria-controls="view-script" tabindex="-1">剧本</button>
+    </div>
   </header>
 
-  <div class="views">
-    <div class="app" id="view-assets">
+  <main class="views">
+    <div class="app drop-target" id="view-assets" role="tabpanel" aria-labelledby="tab-assets">
       <aside class="sidebar">
         <div class="brand">
           <span class="brand-dot"></span>
           <span class="brand-name">资产管理</span>
         </div>
-        <nav class="nav" id="nav"></nav>
+        <nav class="nav" id="nav" aria-label="资产分类"></nav>
         <div class="sidebar-foot">
-          <span class="status-dot" id="cos-dot"></span>
-          <span id="cos-label">连接中…</span>
+          <span class="status-dot" id="cos-dot" aria-hidden="true"></span>
+          <span id="cos-label" role="status">连接中…</span>
         </div>
       </aside>
 
-      <section class="list-pane">
+      <section class="list-pane" id="list-pane" tabindex="-1" aria-label="资源列表">
         <header class="list-head">
           <div class="list-head-title">
             <h1 id="list-title">角色</h1>
             <span class="pill" id="list-count">0</span>
             <span class="pill" id="list-total" hidden></span>
           </div>
-          <button class="icon-btn" id="add-btn" title="新建">+</button>
+          <button class="icon-btn" id="add-btn" title="新建 (N)" aria-label="新建条目">+</button>
         </header>
         <div class="list-search">
-          <input id="search-input" type="text" placeholder="搜索…" autocomplete="off" />
+          <label class="sr-only" for="search-input">搜索</label>
+          <div class="search-field">
+            <input id="search-input" type="text" placeholder="搜索…" autocomplete="off" aria-keyshortcuts="/" />
+            <span class="kbd search-kbd" aria-hidden="true">/</span>
+          </div>
         </div>
-        <div class="list" id="list"></div>
+        <div class="list" id="list" role="listbox" aria-label="资源列表"></div>
       </section>
 
-      <section class="detail-pane" id="detail"></section>
+      <section class="detail-pane" id="detail" role="region" aria-label="详情"></section>
+
+      <div class="drop-hint" id="drop-hint">松开以上传文件</div>
     </div>
 
-    <div class="script-app" id="view-script" hidden></div>
-  </div>
+    <div class="script-app" id="view-script" role="tabpanel" aria-labelledby="tab-script" hidden></div>
+  </main>
 
-  <div class="upload-overlay" id="upload-overlay" hidden>
-    <div class="upload-card">
+  <div class="upload-overlay" id="upload-overlay" role="dialog" aria-modal="true" aria-labelledby="upload-title" hidden>
+    <div class="upload-card" id="upload-card">
       <div class="upload-spinner" aria-hidden="true"></div>
       <div class="upload-title" id="upload-title">正在上传…</div>
+      <div class="upload-steps" id="upload-steps" hidden></div>
+      <div class="upload-bar" id="upload-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="上传进度">
+        <div class="upload-bar-fill" id="upload-bar-fill"></div>
+      </div>
       <div class="upload-sub" id="upload-sub"></div>
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+    <form method="dialog">
+      <div class="confirm-body">
+        <span class="confirm-icon" aria-hidden="true">!</span>
+        <div class="confirm-copy">
+          <div class="confirm-title" id="confirm-title"></div>
+          <div class="confirm-text" id="confirm-text"></div>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button class="btn" value="cancel" id="confirm-cancel">取消</button>
+        <button class="btn danger" value="confirm" id="confirm-ok">删除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="crop-dialog" id="crop-dialog" aria-labelledby="crop-dialog-title">
+    <div class="crop-dialog-head">
+      <div class="crop-dialog-title" id="crop-dialog-title">剪裁对白头像</div>
+      <button type="button" class="icon-btn" id="crop-close" title="关闭" aria-label="关闭剪裁">✕</button>
+    </div>
+    <div class="crop-dialog-body">
+      <div class="crop-stage" id="crop-stage">
+        <img class="crop-source" id="crop-source" alt="" />
+        <div class="crop-rect" id="crop-rect">
+          <span class="crop-handle" id="crop-handle"></span>
+        </div>
+      </div>
+      <aside class="crop-dialog-side">
+        <div class="crop-dialog-label">对白头像预览</div>
+        <div class="crop-preview-box" id="crop-preview"></div>
+        <p class="crop-dialog-hint">拖动方框移动位置，拖动右下角手柄调整大小。</p>
+      </aside>
+    </div>
+    <div class="crop-dialog-actions">
+      <button type="button" class="btn small" id="crop-reset">重置为默认</button>
+      <div class="crop-dialog-spacer"></div>
+      <button type="button" class="btn" id="crop-cancel">取消</button>
+      <button type="button" class="btn primary" id="crop-apply">完成</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   <input type="file" id="file-input" hidden />
 
   <script src="./app.js" type="module"></script>
