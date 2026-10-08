@@ -68,6 +68,7 @@ npm run dev      # node --watch server/index.js（热重载）
 | `COS_BUCKET` | `paradise-lost-1301848969` | 存储桶 |
 | `COS_REGION` | `ap-nanjing` | 地域 |
 | `COS_DOMAIN` | 桶域名 | 会去掉末尾 `/` |
+| `COS_CDN_DOMAIN` | 空 | CDN 加速域名；设置后所有读取 URL 走 CDN，末尾 `/` 会被去掉 |
 | `COS_PREFIX` | `Paradise Lost/game/` | 对象前缀 |
 
 `cosReady()` 在 `secretId && secretKey && bucket && region` 全有值时为真；缺失时上传/预览会失败（启动日志会告警）。
@@ -142,11 +143,11 @@ npm run dev      # node --watch server/index.js（热重载）
   - `DELETE /api/script-scenes/:id`（删除场景）
 - 静态资源：`express.static(public/)`
 
-列表/详情接口会为对象 key 附加 `url`（presignGet 签名）与 `previewUrl`（图片走 `imageMogr2` 预览，失败回退签名 URL）。
+列表/详情接口会为对象 key 附加 `url` 与 `previewUrl`（图片走 `imageMogr2` 预览）。读取 URL 优先使用 `COS_CDN_DOMAIN`（CDN 加速），未配置时回退桶域名 / presignGet 签名；上传（presign-upload）与服务端 COS 调用始终走桶源站。
 
 ## 8. COS 模块（server/cos.js）
 
-自实现签名（HMAC-SHA1），主要导出：`MIME`、`mimeFor`、`hostFor`、`toObjectKey`、`toRelativeKey`、`publicUrl`、`imagePreviewUrl`、`presign`、`presignPut`、`presignGet`、`listObjects`、`deleteObject`、`status`。默认签名有效期 `EXPIRES = 3600` 秒。
+自实现签名（HMAC-SHA1），主要导出：`MIME`、`mimeFor`、`hostFor`、`toObjectKey`、`toRelativeKey`、`readBase`、`publicUrl`、`cdnUrl`、`imagePreviewUrl`、`presign`、`presignPut`、`presignGet`、`listObjects`、`deleteObject`、`status`。默认签名有效期 `EXPIRES = 3600` 秒。
 
 前端上传流程：`app.js` 的 `uploadToCos()` 先取 presign-upload，再 PUT 到 COS，最后把返回的相对 key 保存进数据库。
 

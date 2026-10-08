@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "no
 import { dirname, resolve } from "node:path";
 import { CONFIG } from "./config.js";
 import { db } from "./db.js";
-import { presignGet, imagePreviewUrl } from "./cos.js";
+import { cdnUrl, imagePreviewUrl, toReadUrl } from "./cos.js";
 
 const FALLBACK_TEMPLATE = [
   "label start:",
@@ -27,7 +27,7 @@ const LABEL_NO = {
 
 function signedUrl(relativeKey) {
   if (!relativeKey) return "";
-  return presignGet(relativeKey, {}).url;
+  return cdnUrl(relativeKey);
 }
 
 function previewUrl(relativeKey) {
@@ -90,6 +90,23 @@ function docPath() {
   return resolve(process.cwd(), CONFIG.scriptDocPath);
 }
 
+/*
+ * The block doc stores absolute asset URLs. Route any bucket-origin URL it
+ * holds through the configured read base so persisted docs also use the CDN.
+ */
+function rewriteDocReadUrls(value) {
+  if (Array.isArray(value)) return value.map(rewriteDocReadUrls);
+  if (value && typeof value === "object") {
+    const out = {};
+    Object.keys(value).forEach(function (k) {
+      out[k] = rewriteDocReadUrls(value[k]);
+    });
+    return out;
+  }
+  if (typeof value === "string") return toReadUrl(value);
+  return value;
+}
+
 export function readScriptDoc() {
   const file = docPath();
   if (!existsSync(file)) return { version: 1, labels: {} };
@@ -97,7 +114,7 @@ export function readScriptDoc() {
     const data = JSON.parse(readFileSync(file, "utf8"));
     if (!data || typeof data !== "object") return { version: 1, labels: {} };
     if (!data.labels || typeof data.labels !== "object") data.labels = {};
-    return data;
+    return rewriteDocReadUrls(data);
   } catch (e) {
     return { version: 1, labels: {} };
   }

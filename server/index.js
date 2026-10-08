@@ -6,6 +6,7 @@ import { db, ASSET_TYPES } from "./db.js";
 import {
   presignPut,
   presignGet,
+  cdnUrl,
   listObjects,
   deleteObject,
   toRelativeKey,
@@ -26,9 +27,9 @@ app.use(express.json({ limit: "2mb" }));
 
 const nowIso = () => new Date().toISOString();
 
-function signedUrl(relativeKey, expires) {
+function signedUrl(relativeKey) {
   if (!relativeKey) return "";
-  return presignGet(relativeKey, { expires: expires }).url;
+  return cdnUrl(relativeKey);
 }
 
 function previewUrl(relativeKey) {

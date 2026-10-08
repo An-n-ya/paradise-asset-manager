@@ -123,8 +123,48 @@ export function toRelativeKey(objectKey) {
   return key.startsWith(prefix) ? key.slice(prefix.length) : key;
 }
 
+/*
+ * Base host used for read URLs. Prefers the CDN domain when configured and
+ * falls back to the raw bucket domain otherwise.
+ */
+export function readBase() {
+  return CONFIG.cos.cdnDomain || CONFIG.cos.domain;
+}
+
 export function publicUrl(objectKey) {
-  return CONFIG.cos.domain + "/" + encodeKey(objectKey);
+  return readBase() + "/" + encodeKey(objectKey);
+}
+
+/*
+ * Build a read URL for an asset key (relative to the configured prefix).
+ * Uses the CDN/public domain when available, otherwise falls back to a
+ * presigned URL so private buckets keep working.
+ */
+export function cdnUrl(relativeKey) {
+  const objectKey = toObjectKey(relativeKey);
+  const base = readBase();
+  if (base) return base + "/" + encodeKey(objectKey);
+  return presign("get", objectKey, {}).url;
+}
+
+/*
+ * Rewrite an absolute URL pointing at the bucket origin so it is served
+ * through the read base (CDN when configured). Relative keys and unrelated
+ * values are returned unchanged.
+ */
+export function toReadUrl(url) {
+  const base = readBase();
+  if (!base) return url;
+  const value = String(url);
+  const host = hostFor();
+  const prefixes = ["https://" + host + "/", "http://" + host + "/"];
+  if (CONFIG.cos.domain) prefixes.push(CONFIG.cos.domain + "/");
+  for (let i = 0; i < prefixes.length; i += 1) {
+    if (value.startsWith(prefixes[i])) {
+      return base + value.slice(prefixes[i].length - 1);
+    }
+  }
+  return value;
 }
 
 const COMPRESSIBLE_IMAGE_EXT = [".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".avif", ".heic", ".tiff"];
@@ -316,6 +356,7 @@ export function status() {
     bucket: c.bucket,
     region: c.region,
     domain: c.domain,
+    cdnDomain: c.cdnDomain,
     prefix: c.prefix,
   };
 }

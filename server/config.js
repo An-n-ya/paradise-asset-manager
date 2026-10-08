@@ -40,6 +40,9 @@ export const CONFIG = {
     bucket: process.env.COS_BUCKET || "",
     region: process.env.COS_REGION || "ap-nanjing",
     domain: (process.env.COS_DOMAIN || "").replace(/\/+$/, ""),
+    // Optional CDN domain fronting the bucket. When set, all read URLs are
+    // served through it while writes/API calls keep using the bucket host.
+    cdnDomain: (process.env.COS_CDN_DOMAIN || "").replace(/\/+$/, ""),
     prefix: process.env.COS_PREFIX || "",
   },
 };
